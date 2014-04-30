@@ -7,10 +7,10 @@ bind: bind.cpp
 	g++ bind.cpp -o bind -g
 
 test: bind
-	gcc evil.c -o evil
 	gcc hello.c -o hello
 	./bind stub hello > hello_bound
-	./hello
+	chmod +x hello_bound
+	./hello_bound
 
 funcksections: fucksections.cpp
 	g++ -o fucksections fucksections.cpp
