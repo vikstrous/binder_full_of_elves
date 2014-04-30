@@ -12,6 +12,9 @@ test: bind
 	./bind
 	./hello
 
+funcksections: fucksections.cpp
+	g++ -o fucksections fucksections.cpp
+
 test1: bind
 	gcc hello.c -o hello
 	readelf hello -a

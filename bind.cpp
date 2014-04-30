@@ -56,16 +56,15 @@ int main(void) {
 
   // add new code and a new program entry
   // put stub at end of file
-  // make a new phentry
-  // move everything forward by the size of one ph entry
-  // to_elfw.put_e_phnum(to_elf.get_e_phnum() + 1);
+  // repurpose an existing phentry so that we can load our code
+
   // OR
 
   // XXX: assume section headers are at end of file
-  // move the section headers forward
   int sh_size = to_size - to_elf.get_e_shoff();
   int old_shoff = to_elf.get_e_shoff();
   // XXX: fuck sections!
+  int wasted_space = to_elf.get_e_shentsize() * to_elf.get_e_shnum();
   to_elfw.put_e_shnum(0);
   to_elfw.put_e_shoff(0);
   to_elfw.put_e_shentsize(0);
@@ -85,45 +84,51 @@ int main(void) {
   to_elf_main_phdrw.put_p_filesz(to_elf_main_phdr.get_p_filesz() + stub_space);
 
   // move phdrs that were after the phdr we extended
-  //TODO: copy them forward starting with the last one! also, make sure there's no overlap... this really has to be done more carefully
-  //TODO: This causes the program to die; the issue is that there are overlapping phdr sections
-  int dynamic_phdr_id;
+  //XXX: The issue is that there are references in the .text section (code) that use addresses from the 0x6xxxxx range, so moving that requires relocating the addresses in the .text, which is not impossible, but requires more code/tools
+
+  // some virtual addresses are about to change. update the dynamic section before we move it
+  for (int i = 0; i < to_elf.get_e_phnum(); i++) {
+    Phdr<64, false> to_elf_phdr(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * i);
+    if (to_elf_phdr.get_p_type() == PT_DYNAMIC) {
+        //0x0000000000000019 (DT_INIT_ARRAY)         0x600750
+        //0x000000000000001a (DT_FINI_ARRAY)         0x600758
+        //0x0000000000000003 (DT_PLTGOT)             0x600940
+        // get the location of the dynamic table
+        Phdr<64, false> to_elf_dyn_phdr(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * i);
+        for (int i = 0; ; i++) {
+          //TODO: find out why I need *2
+          Dyn<64, false> dyn(to_buff + to_elf_phdr.get_p_offset() + sizeof(Dyn<64, false>) * i * 2);
+          Dyn_write<64, false> dynw(to_buff + to_elf_phdr.get_p_offset() + sizeof(Dyn<64, false>) * i * 2);
+          // advance these vaddr pointers
+          if (dyn.get_d_tag() == DT_INIT_ARRAY || dyn.get_d_tag() == DT_FINI_ARRAY || dyn.get_d_tag() == DT_PLTGOT) {
+            cout << "move dynamic tag " << dyn.get_d_tag() << endl;
+            dynw.put_d_ptr(dyn.get_d_ptr() + stub_space);
+          }
+          if (dyn.get_d_tag() == DT_NULL) break;
+        }
+    }
+
+  }
+  // now move the dynamic section and other crap around it: .init_array .fini_array .jcr .dynamic .got .got.plt .data .bss
   for (int i = 0; i < to_elf.get_e_phnum(); i++) {
     Phdr<64, false> to_elf_phdr(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * i);
     Phdr_write<64, false> to_elf_phdrw(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * i);
     if (to_elf_phdr.get_p_offset() >= main_phdr_end) {
       cout << "found phdr after the main phdr... moving from " << to_elf_phdr.get_p_offset() << " with size " << to_elf_phdr.get_p_filesz() << " (ends at " << to_elf_phdr.get_p_offset() + to_elf_phdr.get_p_filesz()<< ")" << endl;
-      to_elf_phdrw.put_p_offset(to_elf_phdr.get_p_offset() + stub_space);
-      to_elf_phdrw.put_p_vaddr(to_elf_phdr.get_p_vaddr() + stub_space);
-      to_elf_phdrw.put_p_paddr(to_elf_phdr.get_p_paddr() + stub_space);
-      // move only load, not dynamic (HACK?)
+      // the dynamic section is within the load section following the main load section (TODO: detect the right section better?)
       if (to_elf_phdr.get_p_type() == PT_LOAD) {
         cout << "move" << endl;
         unsigned char buf[to_elf_phdr.get_p_filesz()];
+        cout << "moving from " << to_elf_phdr.get_p_offset() << " with size " << to_elf_phdr.get_p_filesz() << " (ends at " << to_elf_phdr.get_p_offset() + to_elf_phdr.get_p_filesz()<< ")" << endl;
         memcpy(buf, to_buff + to_elf_phdr.get_p_offset(), to_elf_phdr.get_p_filesz());
+        memset(to_buff + to_elf_phdr.get_p_offset(), 0, stub_space);
+        cout << "moving to " << to_elf_phdr.get_p_offset() + stub_space << " with size " << to_elf_phdr.get_p_filesz() << " (ends at " << to_elf_phdr.get_p_offset() + stub_space + to_elf_phdr.get_p_filesz()<< ")" << endl;
         memcpy(to_buff + to_elf_phdr.get_p_offset() + stub_space, buf, to_elf_phdr.get_p_filesz());
-      } else if (to_elf_phdr.get_p_type() == PT_DYNAMIC) {
-        dynamic_phdr_id = i;
       }
+      to_elf_phdrw.put_p_offset(to_elf_phdr.get_p_offset() + stub_space);
+      to_elf_phdrw.put_p_vaddr(to_elf_phdr.get_p_vaddr() + stub_space);
+      to_elf_phdrw.put_p_paddr(to_elf_phdr.get_p_paddr() + stub_space);
     }
-  }
-
-  // now that some virtual addresses were changed we need to update some dynamic section entries
-  //0x0000000000000019 (DT_INIT_ARRAY)         0x600750
-  //0x000000000000001a (DT_FINI_ARRAY)         0x600758
-  //XXX: 0x0000000000000003 (DT_PLTGOT)             0x600940
-  // get the location of the dynamic table
-  Phdr<64, false> to_elf_dyn_phdr(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * dynamic_phdr_id);
-  for (int i = 0; ; i++) {
-    //TODO: find out why I need *2
-    Dyn<64, false> dyn(to_buff + to_elf_dyn_phdr.get_p_offset() + sizeof(Dyn<64, false>) * i * 2);
-    Dyn_write<64, false> dynw(to_buff + to_elf_dyn_phdr.get_p_offset() + sizeof(Dyn<64, false>) * i * 2);
-    // advance these vaddr pointers
-    if (dyn.get_d_tag() == DT_INIT_ARRAY || dyn.get_d_tag() == DT_FINI_ARRAY || dyn.get_d_tag() == DT_PLTGOT) {
-      cout << "move dynamic tag " << dyn.get_d_tag() << endl;
-      dynw.put_d_ptr(dyn.get_d_ptr() + stub_space);
-    }
-    if (dyn.get_d_tag() == DT_NULL) break;
   }
 
   // copy the stub into the newly created space
@@ -141,7 +146,7 @@ int main(void) {
   // write the results out
   fstream tow("hello", fstream::trunc | fstream::out | fstream::binary);
   tow.seekp(0);
-  tow.write((const char*)to_buff, to_size + stub_space);
+  tow.write((const char*)to_buff, to_size - wasted_space + stub_space);
   tow.close();
 
   return 0;
