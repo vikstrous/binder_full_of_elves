@@ -1,4 +1,8 @@
+;BITS 32
 BITS 64
 ; org     0x00200000
   MOV RAX, 0x400410
+  ;MOV RAX, 0x4004a0
   jmp RAX
+  ;MOV EAX, 0x4004a0
+  ;jmp EAX

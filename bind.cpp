@@ -82,6 +82,7 @@ int main(int argc, char* argv[]) {
   // copy the stub to the end
   cerr << to_size + align_pad << endl;
   cerr << to_size + align_pad + stub_size << endl;
+  memset(to_buff + to_size, 0, stub_space + align_pad);
   memcpy(to_buff + to_size + align_pad, stub_buff, stub_size);
   // change the starting address to point to the new entry
   // TODO: dynamically set the return address from the stub to go into the old entry point
@@ -163,8 +164,8 @@ int main(int argc, char* argv[]) {
 //  }
 
   // copy the stub into the newly created space
-  cerr << to_elf_main_phdr.get_p_offset() << endl;
-  cerr << to_elf_main_phdr.get_p_filesz() << endl;
+  //cerr << to_elf_main_phdr.get_p_offset() << endl;
+  //cerr << to_elf_main_phdr.get_p_filesz() << endl;
   //memcpy(to_buff + to_elf_phdr.get_p_offset() + to_elf_phdr.get_p_filesz() - stub_size , stub_buff, stub_size);
   // change the starting address to point to the new entry
   // TODO: dynamically set the return address from the stub to go into the old entry point
