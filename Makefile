@@ -1,6 +1,7 @@
-CC=gcc
-CXX=g++
-TEST_STUB=stub_act_normal
+CC=clang
+CXX=clang++
+TEST_STUB=stub_shell
+TEST_METHOD=2
 
 all: bind
 
@@ -16,8 +17,8 @@ bind: bind.cpp
 	$(CXX) bind.cpp -o bind -g
 
 test: bind
-	$(CC) hello.c -o hello -g
-	./bind $(TEST_STUB) hello > hello_bound
+	$(CC) hello.c -o hello
+	./bind $(TEST_STUB) hello $(TEST_METHOD) > hello_bound
 	chmod +x hello_bound
 	./hello_bound
 
@@ -25,9 +26,9 @@ funcksections: fucksections.cpp
 	$(CXX) -o fucksections fucksections.cpp
 
 test1: bind
-	$(CC) hello.c -o hello -g
+	$(CC) hello.c -o hello
 	readelf hello -a
 
 test2: bind
-	./bind $(TEST_STUB) hello > hello_bound
+	./bind $(TEST_STUB) hello $(TEST_METHOD) > hello_bound
 	readelf hello_bound -a
