@@ -30,7 +30,7 @@ int main(int argc, char* argv[]) {
     cerr << "failed to open " << argv[1] << " for reading" << endl;
     return 1;
   }
-  fstream to(argv[2], fstream::in | fstream::out | fstream::binary);
+  fstream to(argv[2], fstream::in | fstream::binary);
   if (!to.is_open()) {
     cerr << "failed to open " << argv[2] << " for reading" << endl;
     return 1;
