@@ -1,10 +1,10 @@
 all: bind
 
 stub: stub.asm
-	yasm stub.asm -f bin -o stub stub.asm
+	yasm -f bin -o stub stub.asm
 
 bind: bind.cpp
-	g++ bind.cpp -o bind
+	g++ bind.cpp -o bind -g
 
 test: bind
 	gcc evil.c -o evil
