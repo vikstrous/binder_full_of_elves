@@ -1,6 +1,6 @@
 CC=clang
 CXX=clang++
-TEST_STUB=stub_shell
+TEST_STUB=stub_exit_43
 TEST_METHOD=2
 
 all: bind

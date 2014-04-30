@@ -3,5 +3,5 @@ BITS 64
 
 ; exit()
   mov eax, 1
-  mov ebx, 42
+  mov ebx, 43
   int 0x80
