@@ -9,7 +9,7 @@ bind: bind.cpp
 test: bind
 	gcc evil.c -o evil
 	gcc hello.c -o hello
-	./bind
+	./bind stub hello > hello_bound
 	./hello
 
 funcksections: fucksections.cpp
@@ -20,5 +20,5 @@ test1: bind
 	readelf hello -a
 
 test2: bind
-	./bind
-	readelf hello -a
+	./bind stub hello > hello_bound
+	readelf hello_bound -a
