@@ -16,6 +16,7 @@ int main(void) {
   stub.seekg(0, ifstream::end);
   int stub_size = stub.tellg();
   stub.seekg(0);
+  int stub_space = ((stub_size / 16) + 1) * 16;
   from.seekg(0, ifstream::end);
   int from_size = from.tellg();
   from.seekg(0);
@@ -26,7 +27,7 @@ int main(void) {
   // allocate memory for the two files
   unsigned char stub_buff[stub_size];
   unsigned char from_buff[from_size];
-  unsigned char to_buff[to_size + stub_size];
+  unsigned char to_buff[to_size + stub_space];
 
   // read the headers
   stub.read((char*)stub_buff, stub_size);
@@ -66,40 +67,73 @@ int main(void) {
   int old_shoff = to_elf.get_e_shoff();
   // XXX: fuck sections!
   to_elfw.put_e_shnum(0);
+  to_elfw.put_e_shoff(0);
+  to_elfw.put_e_shentsize(0);
+  to_elfw.put_e_shstrndx(0);
+
   //unsigned char buf[sh_size];
   //memcpy(buf, to_buff + to_elf.get_e_shoff(), sh_size);
   //memcpy(to_buff + to_elf.get_e_shoff() + stub_size, buf, sh_size);
   //to_elfw.put_e_shoff(to_elf.get_e_shoff() + stub_size);
 
   // extend the size of the main phdr
-  Phdr<64, false> to_elf_phdr(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * main_phdr);
-  Phdr_write<64, false> to_elf_phdrw(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * main_phdr);
-  int main_phdr_end = to_elf_phdr.get_p_offset() + to_elf_phdr.get_p_filesz();
-  to_elf_phdrw.put_p_memsz(to_elf_phdr.get_p_memsz() + stub_size);
-  cout << to_elf_phdr.get_p_filesz() << endl;
-  to_elf_phdrw.put_p_filesz(to_elf_phdr.get_p_filesz() + stub_size);
+  Phdr<64, false> to_elf_main_phdr(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * main_phdr);
+  Phdr_write<64, false> to_elf_main_phdrw(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * main_phdr);
+  int main_phdr_end = to_elf_main_phdr.get_p_offset() + to_elf_main_phdr.get_p_filesz();
+  to_elf_main_phdrw.put_p_memsz(to_elf_main_phdr.get_p_memsz() + stub_space);
+  cout << to_elf_main_phdr.get_p_filesz() << endl;
+  to_elf_main_phdrw.put_p_filesz(to_elf_main_phdr.get_p_filesz() + stub_space);
 
   // move phdrs that were after the phdr we extended
   //TODO: copy them forward starting with the last one! also, make sure there's no overlap... this really has to be done more carefully
   //TODO: This causes the program to die; the issue is that there are overlapping phdr sections
-  for (int i = to_elf.get_e_phnum() - 1; i >= 0 ; i--) {
+  int dynamic_phdr_id;
+  for (int i = 0; i < to_elf.get_e_phnum(); i++) {
     Phdr<64, false> to_elf_phdr(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * i);
     Phdr_write<64, false> to_elf_phdrw(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * i);
     if (to_elf_phdr.get_p_offset() >= main_phdr_end) {
       cout << "found phdr after the main phdr... moving from " << to_elf_phdr.get_p_offset() << " with size " << to_elf_phdr.get_p_filesz() << " (ends at " << to_elf_phdr.get_p_offset() + to_elf_phdr.get_p_filesz()<< ")" << endl;
-      unsigned char buf[to_elf_phdr.get_p_filesz()];
-      memcpy(buf, to_buff + to_elf_phdr.get_p_offset(), to_elf_phdr.get_p_filesz());
-      memcpy(to_buff + to_elf_phdr.get_p_offset() + stub_size, buf, to_elf_phdr.get_p_filesz());
-      to_elf_phdrw.put_p_offset(to_elf_phdr.get_p_offset() + stub_size);
+      to_elf_phdrw.put_p_offset(to_elf_phdr.get_p_offset() + stub_space);
+      to_elf_phdrw.put_p_vaddr(to_elf_phdr.get_p_vaddr() + stub_space);
+      to_elf_phdrw.put_p_paddr(to_elf_phdr.get_p_paddr() + stub_space);
+      // move only load, not dynamic (HACK?)
+      if (to_elf_phdr.get_p_type() == PT_LOAD) {
+        cout << "move" << endl;
+        unsigned char buf[to_elf_phdr.get_p_filesz()];
+        memcpy(buf, to_buff + to_elf_phdr.get_p_offset(), to_elf_phdr.get_p_filesz());
+        memcpy(to_buff + to_elf_phdr.get_p_offset() + stub_space, buf, to_elf_phdr.get_p_filesz());
+      } else if (to_elf_phdr.get_p_type() == PT_DYNAMIC) {
+        dynamic_phdr_id = i;
+      }
     }
   }
+
+  // now that some virtual addresses were changed we need to update some dynamic section entries
+  //0x0000000000000019 (DT_INIT_ARRAY)         0x600750
+  //0x000000000000001a (DT_FINI_ARRAY)         0x600758
+  //XXX: 0x0000000000000003 (DT_PLTGOT)             0x600940
+  // get the location of the dynamic table
+  Phdr<64, false> to_elf_dyn_phdr(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * dynamic_phdr_id);
+  for (int i = 0; ; i++) {
+    //TODO: find out why I need *2
+    Dyn<64, false> dyn(to_buff + to_elf_dyn_phdr.get_p_offset() + sizeof(Dyn<64, false>) * i * 2);
+    Dyn_write<64, false> dynw(to_buff + to_elf_dyn_phdr.get_p_offset() + sizeof(Dyn<64, false>) * i * 2);
+    // advance these vaddr pointers
+    if (dyn.get_d_tag() == DT_INIT_ARRAY || dyn.get_d_tag() == DT_FINI_ARRAY || dyn.get_d_tag() == DT_PLTGOT) {
+      cout << "move dynamic tag " << dyn.get_d_tag() << endl;
+      dynw.put_d_ptr(dyn.get_d_ptr() + stub_space);
+    }
+    if (dyn.get_d_tag() == DT_NULL) break;
+  }
+
   // copy the stub into the newly created space
-  cerr << to_elf_phdr.get_p_offset() << endl;
-  cerr << to_elf_phdr.get_p_filesz() << endl;
+  cerr << to_elf_main_phdr.get_p_offset() << endl;
+  cerr << to_elf_main_phdr.get_p_filesz() << endl;
   //memcpy(to_buff + to_elf_phdr.get_p_offset() + to_elf_phdr.get_p_filesz() - stub_size , stub_buff, stub_size);
   // change the starting address to point to the new entry
   // TODO: dynamically set the return address from the stub to go into the old entry point
-  //to_elfw.put_e_entry(to_elf_phdr.get_p_vaddr() + to_elf_phdr.get_p_memsz() - stub_size);
+  //to_elfw.put_e_entry(to_elf_main_phdr.get_p_vaddr() + to_elf_main_phdr.get_p_memsz() - stub_space);
+  //to_elfw.put_e_entry(to_elf.get_e_entry() + stub_space);
 
   from.close();
   to.close();
@@ -107,7 +141,7 @@ int main(void) {
   // write the results out
   fstream tow("hello", fstream::trunc | fstream::out | fstream::binary);
   tow.seekp(0);
-  tow.write((const char*)to_buff, to_size + stub_size);
+  tow.write((const char*)to_buff, to_size + stub_space);
   tow.close();
 
   return 0;

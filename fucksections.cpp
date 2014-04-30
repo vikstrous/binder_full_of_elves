@@ -17,6 +17,9 @@ int main(void) {
   Ehdr_write<64, false> to_elfw(to_buff);
 
   to_elfw.put_e_shnum(0);
+  to_elfw.put_e_shoff(0);
+  to_elfw.put_e_shentsize(0);
+  to_elfw.put_e_shstrndx(0);
 
   to.close();
 
