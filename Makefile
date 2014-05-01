@@ -1,24 +1,30 @@
-CC=clang
-CXX=clang++
+CC=gcc
+CXX=g++
 TEST_STUB=stub_exit_43
 TEST_METHOD=2
 
 all: bind
 
-stub: stub.asm
-	yasm -f bin -o stub stub.asm
+stub_exit_43: stub_exit_43.asm
+	yasm -f bin -o stub_exit_43 stub_exit_43.asm
 
 stub_act_normal: stub_act_normal.asm
 	yasm -f bin -o stub_act_normal stub_act_normal.asm
 
-stubs: stub stub_act_normal
+stubs: stub_exit_43 stub_act_normal
 
 bind: bind.cpp
 	$(CXX) bind.cpp -o bind -g
 
 test: bind
 	$(CC) hello.c -o hello
-	./bind $(TEST_STUB) hello $(TEST_METHOD) > hello_bound
+	./bind $(TEST_STUB) hello 1 > hello_bound
+	chmod +x hello_bound
+	./hello_bound
+
+testt: bind
+	$(CC) hello.c -o hello
+	./bind $(TEST_STUB) hello 2 > hello_bound
 	chmod +x hello_bound
 	./hello_bound
 

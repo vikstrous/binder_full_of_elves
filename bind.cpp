@@ -44,14 +44,18 @@ int main(int argc, char* argv[]) {
   to.seekg(0, ifstream::end);
   int to_size = to.tellg();
   to.seekg(0);
+  int extension_size = 0;
 
-  // not sure if this is necessay
-  int align_pad = ((to_size / 16) + 1) * 16 - to_size;
+  // not sure if this is necessary
+  int align_pad =  0; //((to_size / 16) + 1) * 16 - to_size;
   cerr << "align pad: " << align_pad << endl;
 
   // allocate memory for the files and read them in
-  unsigned char stub_buff[stub_size];
-  unsigned char to_buff[to_size + stub_space + align_pad];
+  // thy are allocated on the heap because they may be too big for the stack
+  unsigned char *stub_buff = new unsigned char[stub_size];
+  unsigned char *to_buff = new unsigned char[to_size + stub_space + align_pad];
+  unsigned char *extension;
+  cerr << "stub size: " << stub_size << endl;
   stub.read((char*)stub_buff, stub_size);
   to.read((char*)to_buff, to_size);
 
@@ -72,6 +76,16 @@ int main(int argc, char* argv[]) {
       break;
     }
   }
+
+  // XXX: assume section headers are at end of file
+  //int sh_size = to_size - to_elf.get_e_shoff();
+  //int old_shoff = to_elf.get_e_shoff();
+  // XXX: fuck sections!
+  //int wasted_space = to_elf.get_e_shentsize() * to_elf.get_e_shnum();
+  to_elfw.put_e_shnum(0);
+  to_elfw.put_e_shoff(0);
+  to_elfw.put_e_shentsize(0);
+  to_elfw.put_e_shstrndx(0);
 
   Phdr<64, false> to_elf_main_phdr(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * main_phdr);
   Phdr_write<64, false> to_elf_main_phdrw(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * main_phdr);
@@ -105,20 +119,36 @@ int main(int argc, char* argv[]) {
         Phdr_write<64, false> to_elf_phdrw(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * i);
         int main_phdr_end = to_elf_main_phdr.get_p_offset() + to_elf_main_phdr.get_p_filesz();
         if (to_elf_phdr.get_p_offset() >= main_phdr_end) {
-          cerr << "found phdr after the main phdr... moving from " << to_elf_phdr.get_p_offset() << " with size " << to_elf_phdr.get_p_filesz() << " (ends at " << to_elf_phdr.get_p_offset() + to_elf_phdr.            get_p_filesz()<< ")" << endl;
           // the dynamic section is within the load section following the main load section (TODO: detect the right section better?)
           // we extend this section and make it executable
           if (to_elf_phdr.get_p_type() == PT_LOAD) {
+            cerr << "found phdr after the main phdr... extending section " << i << endl;
+            // extend both the file size and the mem size to contain the stub
             to_elf_phdrw.put_p_memsz(to_elf_phdr.get_p_memsz() + stub_size);
             to_elf_phdrw.put_p_filesz(to_elf_phdr.get_p_filesz() + stub_size);
             // make executable
             to_elf_phdrw.put_p_flags(to_elf_phdr.get_p_flags() | PF_X);
-            // copy the stub to the end
-            memcpy(to_buff + to_elf_phdr.get_p_offset() + to_elf_phdr.get_p_filesz() - stub_size, stub_buff, stub_size);
+            // the extension is used when the difference between memsz and filesz is so big that all the zeros don't fit in the original elf file, so we make the file bigger
+            // create and zero out the extension
+            if (to_elf_phdr.get_p_offset() + to_elf_phdr.get_p_memsz() > to_size) {
+              extension_size = to_elf_phdr.get_p_offset() + to_elf_phdr.get_p_memsz() - to_size;
+              cerr << "extension size: " << extension_size << endl;
+              extension = new unsigned char[extension_size];
+              memset(extension, 0, extension_size - stub_size);
+            }
+            // zero out the exta space in the file
+            memset(to_buff + to_elf_phdr.get_p_offset() + to_elf_phdr.get_p_filesz(), 0, min(to_elf_phdr.get_p_memsz() - to_elf_phdr.get_p_filesz(), to_size - to_elf_phdr.get_p_offset() - to_elf_phdr.get_p_filesz()));
+            // make the file size and mem size the same
+            to_elf_phdrw.put_p_filesz(to_elf_phdr.get_p_memsz());
+            // copy the stub to the end of either the file or the extension
+            if (extension_size == 0) {
+              memcpy(to_buff + to_elf_phdr.get_p_offset() + to_elf_phdr.get_p_filesz() - stub_size, stub_buff, stub_size);
+            } else {
+              memcpy(extension + extension_size - stub_size, stub_buff, stub_size);
+            }
             // change the starting address to point to the new entry
             // TODO: dynamically set the return address from the stub to go into the old entry point
-            // XXX: assume memsz = filesz
-            to_elfw.put_e_entry(to_elf_phdr.get_p_vaddr() + to_elf_phdr.get_p_filesz() - stub_size);
+            to_elfw.put_e_entry(to_elf_phdr.get_p_vaddr() + to_elf_phdr.get_p_memsz() - stub_size);
          }
         }
       }
@@ -130,15 +160,7 @@ int main(int argc, char* argv[]) {
      */
     case 3:
       {
-      // XXX: assume section headers are at end of file
-      int sh_size = to_size - to_elf.get_e_shoff();
-      int old_shoff = to_elf.get_e_shoff();
-      // XXX: fuck sections!
-      int wasted_space = to_elf.get_e_shentsize() * to_elf.get_e_shnum();
-      to_elfw.put_e_shnum(0);
-      to_elfw.put_e_shoff(0);
-      to_elfw.put_e_shentsize(0);
-      to_elfw.put_e_shstrndx(0);
+
 
       //unsigned char buf[sh_size];
       //memcpy(buf, to_buff + to_elf.get_e_shoff(), sh_size);
@@ -186,12 +208,13 @@ int main(int argc, char* argv[]) {
           // the dynamic section is within the load section following the main load section (TODO: detect the right section better?)
           if (to_elf_phdr.get_p_type() == PT_LOAD) {
             cerr << "move" << endl;
-            unsigned char buf[to_elf_phdr.get_p_filesz()];
+            unsigned char *buf = new unsigned char[to_elf_phdr.get_p_filesz()];
             cerr << "moving from " << to_elf_phdr.get_p_offset() << " with size " << to_elf_phdr.get_p_filesz() << " (ends at " << to_elf_phdr.get_p_offset() + to_elf_phdr.get_p_filesz()<< ")" << endl;
             memcpy(buf, to_buff + to_elf_phdr.get_p_offset(), to_elf_phdr.get_p_filesz());
             memset(to_buff + to_elf_phdr.get_p_offset(), 0, stub_space);
             cerr << "moving to " << to_elf_phdr.get_p_offset() + stub_space << " with size " << to_elf_phdr.get_p_filesz() << " (ends at " << to_elf_phdr.get_p_offset() + stub_space + to_elf_phdr.get_p_filesz()<< ")" << endl;
             memcpy(to_buff + to_elf_phdr.get_p_offset() + stub_space, buf, to_elf_phdr.get_p_filesz());
+            delete[] buf;
           }
           to_elf_phdrw.put_p_offset(to_elf_phdr.get_p_offset() + stub_space);
           to_elf_phdrw.put_p_vaddr(to_elf_phdr.get_p_vaddr() + stub_space);
@@ -214,7 +237,12 @@ int main(int argc, char* argv[]) {
   stub.close();
 
   // write the results out
-  cout.write((const char*)to_buff, to_size + stub_space + align_pad);
+  cerr << "to_size " << to_size << endl;
+  cout.write((const char*)to_buff, extension_size > 0 ? to_size : (to_size + stub_space + align_pad));
+  cout.write((const char*)extension, extension_size);
+
+  delete[] stub_buff;
+  delete[] to_buff;
 
   return 0;
 }
