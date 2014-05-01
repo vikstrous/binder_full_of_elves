@@ -46,14 +46,10 @@ int main(int argc, char* argv[]) {
   to.seekg(0);
   int extension_size = 0;
 
-  // not sure if this is necessary
-  int align_pad =  0; //((to_size / 16) + 1) * 16 - to_size;
-  cerr << "align pad: " << align_pad << endl;
-
   // allocate memory for the files and read them in
   // thy are allocated on the heap because they may be too big for the stack
   unsigned char *stub_buff = new unsigned char[stub_size];
-  unsigned char *to_buff = new unsigned char[to_size + stub_space + align_pad];
+  unsigned char *to_buff = new unsigned char[to_size + stub_space];
   unsigned char *extension;
   cerr << "stub size: " << stub_size << endl;
   stub.read((char*)stub_buff, stub_size);
@@ -77,9 +73,6 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  // XXX: assume section headers are at end of file
-  //int sh_size = to_size - to_elf.get_e_shoff();
-  //int old_shoff = to_elf.get_e_shoff();
   // XXX: fuck sections!
   //int wasted_space = to_elf.get_e_shentsize() * to_elf.get_e_shnum();
   to_elfw.put_e_shnum(0);
@@ -99,14 +92,13 @@ int main(int argc, char* argv[]) {
       to_elf_main_phdrw.put_p_filesz(to_size + stub_space);
 
       // copy the stub to the end
-      cerr << to_size + align_pad << endl;
-      cerr << to_size + align_pad + stub_size << endl;
-      memset(to_buff + to_size, 0, stub_space + align_pad);
-      memcpy(to_buff + to_size + align_pad, stub_buff, stub_size);
+      cerr << to_size  << endl;
+      cerr << to_size + stub_size << endl;
+      memset(to_buff + to_size, 0, stub_space);
+      memcpy(to_buff + to_size, stub_buff, stub_size);
       // change the starting address to point to the new entry
       // TODO: dynamically set the return address from the stub to go into the old entry point
-      //to_elfw.put_e_entry(to_elf_main_phdr.get_p_vaddr() + to_elf_main_phdr.get_p_memsz() - stub_space);
-      to_elfw.put_e_entry(to_elf_main_phdr.get_p_vaddr() + to_size + align_pad);
+      to_elfw.put_e_entry(to_elf_main_phdr.get_p_vaddr() + to_size);
       break;
 
     /*
@@ -160,13 +152,6 @@ int main(int argc, char* argv[]) {
      */
     case 3:
       {
-
-
-      //unsigned char buf[sh_size];
-      //memcpy(buf, to_buff + to_elf.get_e_shoff(), sh_size);
-      //memcpy(to_buff + to_elf.get_e_shoff() + stub_size, buf, sh_size);
-      //to_elfw.put_e_shoff(to_elf.get_e_shoff() + stub_size);
-
       // extend the size of the main phdr
       int main_phdr_end = to_elf_main_phdr.get_p_offset() + to_elf_main_phdr.get_p_filesz();
       to_elf_main_phdrw.put_p_memsz(to_elf_main_phdr.get_p_memsz() + stub_space);
@@ -224,8 +209,8 @@ int main(int argc, char* argv[]) {
       }
       break;
 
+    // repurpose an existing phentry so that we can load our code (ex. stack?)
     case 4:
-    // repurpose an existing phentry so that we can load our code
       break;
 
     default:
@@ -238,7 +223,7 @@ int main(int argc, char* argv[]) {
 
   // write the results out
   cerr << "to_size " << to_size << endl;
-  cout.write((const char*)to_buff, extension_size > 0 ? to_size : (to_size + stub_space + align_pad));
+  cout.write((const char*)to_buff, extension_size > 0 ? to_size : (to_size + stub_space));
   cout.write((const char*)extension, extension_size);
 
   delete[] stub_buff;
