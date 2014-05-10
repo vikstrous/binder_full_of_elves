@@ -40,7 +40,9 @@ int main(int argc, char* argv[]) {
   stub.seekg(0, ifstream::end);
   int stub_size = stub.tellg();
   stub.seekg(0);
-  int stub_space = ((stub_size / 16) + 1) * 16;
+  //int stub_space = ((stub_size / 16) + 1) * 16;
+  // XXX: assume page size is 0x1000
+  int stub_space = ((stub_size / 0x1000) + 1) * 0x1000;
   to.seekg(0, ifstream::end);
   int to_size = to.tellg();
   to.seekg(0);
@@ -147,22 +149,60 @@ int main(int argc, char* argv[]) {
       break;
 
     /*
-     * Here we extend the executable LOAD phentry by the size of the stub and move everything after it forward. This makes it so that some of the data is now loaded at different addresses than before, so we need to properly relocate the data. The we change the entry point.
-     * XXX: This is not working yet. We need to do the relocation properly
+     * Here we extend the executable LOAD phentry by the size of the stub and move everything after it forward a page (in the file and not in memory). This requires a gap large enough for the stub to exist at the end of the executable section. Then we change the entry point
      */
     case 3:
       {
       // extend the size of the main phdr
       int main_phdr_end = to_elf_main_phdr.get_p_offset() + to_elf_main_phdr.get_p_filesz();
-      to_elf_main_phdrw.put_p_memsz(to_elf_main_phdr.get_p_memsz() + stub_space);
+      to_elf_main_phdrw.put_p_memsz(to_elf_main_phdr.get_p_memsz() + stub_size);
       cerr << to_elf_main_phdr.get_p_filesz() << endl;
-      to_elf_main_phdrw.put_p_filesz(to_elf_main_phdr.get_p_filesz() + stub_space);
+      to_elf_main_phdrw.put_p_filesz(to_elf_main_phdr.get_p_filesz() + stub_size);
 
+      // now move the dynamic section and other crap around it: .init_array .fini_array .jcr .dynamic .got .got.plt .data .bss
+      for (int i = 0; i < to_elf.get_e_phnum(); i++) {
+        Phdr<64, false> to_elf_phdr(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * i);
+        Phdr_write<64, false> to_elf_phdrw(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * i);
+        if (to_elf_phdr.get_p_offset() >= main_phdr_end) {
+          cerr << "found phdr after the main phdr... moving from " << to_elf_phdr.get_p_offset() << " with size " << to_elf_phdr.get_p_filesz() << " (ends at " << to_elf_phdr.get_p_offset() + to_elf_phdr.get_p_filesz()<< ")" << endl;
+          // XXX: assume filesz = memsz
+          if (to_elf_main_phdr.get_p_vaddr() + to_elf_main_phdr.get_p_filesz() + stub_size > to_elf_phdr.get_p_vaddr()) {
+            cerr << "stub too big - would cause overlap in memory. Try another method." << endl;
+            exit(1);
+          }
+          // the dynamic section is within the load section following the main load section (TODO: detect the right section better?)
+          if (to_elf_phdr.get_p_type() == PT_LOAD) {
+            cerr << "move" << endl;
+            unsigned char *buf = new unsigned char[to_elf_phdr.get_p_filesz()];
+            cerr << "moving from " << to_elf_phdr.get_p_offset() << " with size " << to_elf_phdr.get_p_filesz() << " (ends at " << to_elf_phdr.get_p_offset() + to_elf_phdr.get_p_filesz()<< ")" << endl;
+            memcpy(buf, to_buff + to_elf_phdr.get_p_offset(), to_elf_phdr.get_p_filesz());
+            memset(to_buff + to_elf_phdr.get_p_offset(), 0, stub_space);
+            cerr << "moving to " << to_elf_phdr.get_p_offset() + stub_space << " with size " << to_elf_phdr.get_p_filesz() << " (ends at " << to_elf_phdr.get_p_offset() + stub_space + to_elf_phdr.get_p_filesz()<< ")" << endl;
+            memcpy(to_buff + to_elf_phdr.get_p_offset() + stub_space, buf, to_elf_phdr.get_p_filesz());
+            delete[] buf;
+          }
+          to_elf_phdrw.put_p_offset(to_elf_phdr.get_p_offset() + stub_space);
+          to_elf_phdrw.put_p_align(0x1000);
+        }
+      }
+      // XXX: assume filesz = memsz
+      memcpy(to_buff + to_elf_main_phdr.get_p_offset() + to_elf_main_phdr.get_p_filesz(), stub_buff, stub_size);
+      // change the starting address to point to the new entry
+      // TODO: dynamically set the return address from the stub to go into the old entry point
+      to_elfw.put_e_entry(to_elf_main_phdr.get_p_vaddr() + to_elf_main_phdr.get_p_filesz());
+      }
+      break;
+
+    /*
+     * Here we extend the executable LOAD phentry by the size of the stub and move everything after it forward. This makes it so that some of the data is now loaded at different addresses than before, so we need to properly relocate the data and update references. Then we change the entry point.
+     * XXX: This is not working yet. We need to do the relocation properly
+     */
+    case 4:
       // move phdrs that were after the phdr we extended
       //XXX: The issue is that there are references in the .text section (code) that use addresses from the 0x6xxxxx range, so moving that requires relocating the addresses in the .text, which is not impossible, but requires more code/tools
 
       // some virtual addresses are about to change. update the dynamic section before we move it
-      for (int i = 0; i < to_elf.get_e_phnum(); i++) {
+      /*for (int i = 0; i < to_elf.get_e_phnum(); i++) {
         Phdr<64, false> to_elf_phdr(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * i);
         if (to_elf_phdr.get_p_type() == PT_DYNAMIC) {
             //0x0000000000000019 (DT_INIT_ARRAY)         0x600750
@@ -182,35 +222,11 @@ int main(int argc, char* argv[]) {
               if (dyn.get_d_tag() == DT_NULL) break;
             }
         }
-
-      }
-      // now move the dynamic section and other crap around it: .init_array .fini_array .jcr .dynamic .got .got.plt .data .bss
-      for (int i = 0; i < to_elf.get_e_phnum(); i++) {
-        Phdr<64, false> to_elf_phdr(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * i);
-        Phdr_write<64, false> to_elf_phdrw(to_buff + to_elf.get_e_phoff() + to_elf.get_e_phentsize() * i);
-        if (to_elf_phdr.get_p_offset() >= main_phdr_end) {
-          cerr << "found phdr after the main phdr... moving from " << to_elf_phdr.get_p_offset() << " with size " << to_elf_phdr.get_p_filesz() << " (ends at " << to_elf_phdr.get_p_offset() + to_elf_phdr.get_p_filesz()<< ")" << endl;
-          // the dynamic section is within the load section following the main load section (TODO: detect the right section better?)
-          if (to_elf_phdr.get_p_type() == PT_LOAD) {
-            cerr << "move" << endl;
-            unsigned char *buf = new unsigned char[to_elf_phdr.get_p_filesz()];
-            cerr << "moving from " << to_elf_phdr.get_p_offset() << " with size " << to_elf_phdr.get_p_filesz() << " (ends at " << to_elf_phdr.get_p_offset() + to_elf_phdr.get_p_filesz()<< ")" << endl;
-            memcpy(buf, to_buff + to_elf_phdr.get_p_offset(), to_elf_phdr.get_p_filesz());
-            memset(to_buff + to_elf_phdr.get_p_offset(), 0, stub_space);
-            cerr << "moving to " << to_elf_phdr.get_p_offset() + stub_space << " with size " << to_elf_phdr.get_p_filesz() << " (ends at " << to_elf_phdr.get_p_offset() + stub_space + to_elf_phdr.get_p_filesz()<< ")" << endl;
-            memcpy(to_buff + to_elf_phdr.get_p_offset() + stub_space, buf, to_elf_phdr.get_p_filesz());
-            delete[] buf;
-          }
-          to_elf_phdrw.put_p_offset(to_elf_phdr.get_p_offset() + stub_space);
-          to_elf_phdrw.put_p_vaddr(to_elf_phdr.get_p_vaddr() + stub_space);
-          to_elf_phdrw.put_p_paddr(to_elf_phdr.get_p_paddr() + stub_space);
-        }
-      }
-      }
+      }*/
       break;
 
     // repurpose an existing phentry so that we can load our code (ex. stack?)
-    case 4:
+    case 5:
       break;
 
     default:

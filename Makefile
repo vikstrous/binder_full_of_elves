@@ -28,6 +28,13 @@ testt: bind
 	chmod +x hello_bound
 	./hello_bound
 
+testtt: bind
+	$(CC) hello.c -o hello
+	./bind $(TEST_STUB) hello 3 > hello_bound
+	chmod +x hello_bound
+	./hello_bound
+
+
 funcksections: fucksections.cpp
 	$(CXX) -o fucksections fucksections.cpp
 
