@@ -1,5 +1,5 @@
 #include <fstream>
-#include "elfstuff/elfcpp.h"
+#include "elftools/elfcpp.h"
 
 using namespace std;
 using namespace elfcpp;
