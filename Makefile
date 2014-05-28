@@ -11,7 +11,7 @@ bind: bind.cpp
 	$(CXX) bind.cpp -o bind -g
 
 clean:
-	rm -f bind test/remove_sections test/hello hello_bound
+	rm -f bind test/remove_sections test/hello test/hello_bound
 
 # build the stubs
 
