@@ -9,7 +9,7 @@ do
   then
     echo
     echo $file
-    ../bind stub_exit_43 /bin/$file 2 > tests/$file
+    ../bind ../stubs/stub_exit_43 /bin/$file 2 > tests/$file
     chmod +x tests/$file
   fi
 done

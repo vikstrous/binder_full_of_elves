@@ -28,6 +28,7 @@ stubs: stub_exit_43 stub_act_normal
 remove_sections: test/remove_sections.cpp
 	$(CXX) -o test/remove_sections test/remove_sections.cpp
 
+.PHONY: test
 test: bind
 	$(CC) test/hello.c -o test/hello
 	./bind $(TEST_STUB) test/hello 1 > test/hello_bound

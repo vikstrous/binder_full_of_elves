@@ -182,7 +182,7 @@ int main(int argc, char* argv[]) {
             delete[] buf;
           }
           to_elf_phdrw.put_p_offset(to_elf_phdr.get_p_offset() + stub_space);
-          to_elf_phdrw.put_p_align(0x1000);
+          //to_elf_phdrw.put_p_align(0x1000);
         }
       }
       // XXX: assume filesz = memsz
