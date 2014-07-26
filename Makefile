@@ -10,7 +10,7 @@ all: bind stream_bind
 bind: bind.cpp
 	$(CXX) bind.cpp -o bind -g
 
-stream_bind: bind.cpp
+stream_bind: stream_bind.c
 	$(CC) stream_bind.c -o stream_bind -g
 
 test_stream: stream_bind

