@@ -13,6 +13,7 @@
 
 // TODO: move forward by the necessary number of pages, not just one
 // TODO: perserve the sections
+// TODO: don't make so many assumptions about what segments other than the text segment exist
 
 static long long page_size = 0x1000;
 static unsigned shell_size;
