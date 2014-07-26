@@ -3,12 +3,20 @@ CXX=g++
 TEST_STUB=stubs/stub_exit_43
 TEST_METHOD=2
 
-all: bind
+all: bind stream_bind
 
 # build the binder
 
 bind: bind.cpp
 	$(CXX) bind.cpp -o bind -g
+
+stream_bind: bind.cpp
+	$(CC) stream_bind.c -o stream_bind -g
+
+test_stream: stream_bind
+	$(CC) test/hello.c -o test/hello
+	cat test/hello | ./stream_bind > test/hello_bound
+	chmod +x test/hello_bound
 
 clean:
 	rm -f bind test/remove_sections test/hello test/hello_bound
