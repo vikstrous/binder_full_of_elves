@@ -13,7 +13,6 @@
 
 // TODO: move forward by the necessary number of pages, not just one
 // TODO: perserve the sections
-// TODO: make the shell path a parameter
 // TODO: patch the shell to return to the right place
 
 static long long page_size = 0x1000;
@@ -249,10 +248,16 @@ int process(int in_fd, int out_fd) {
 }
 
 int main(int argc, char* argv[]) {
+  if (argc != 2) {
+    fprintf(stderr, "Usage: %s <shell_path>", argv[0]);
+    return 0;
+  }
   //XXX: a bit of a race condition here, TOCTOU, etc. but such is the way of the lazy; we check the size later again, I guess...
-  static unsigned char file_name[] = "./stubs/stub_exit_43";
-  shell_size = get_file_size(file_name);
-  shell = read_whole_file(file_name, shell_size);
+  shell_size = get_file_size(argv[1]);
+  shell = read_whole_file(argv[1], shell_size);
+  if (!shell) {
+    return -1;
+  }
   int ret = process(STDIN_FILENO, STDOUT_FILENO);
   free(shell);
   return ret;

@@ -15,7 +15,7 @@ stream_bind: stream_bind.c
 
 test_stream: stream_bind
 	$(CC) test/hello.c -o test/hello
-	cat test/hello | ./stream_bind > test/hello_bound
+	cat test/hello | ./stream_bind ./stubs/stub_exit_43 > test/hello_bound
 	chmod +x test/hello_bound
 
 clean:
