@@ -12,7 +12,7 @@
 #include "include/elf/external.h"
 
 // TODO: move forward by the necessary number of pages, not just one
-// TODO: perserve the sections
+// TODO: preserve the sections
 // TODO: patch the shell to return to the right place
 
 static long long page_size = 0x1000;
@@ -182,10 +182,13 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
 
         // 6. start sending the ehdr and phdr
         fprintf(stderr, "start sending...\n");
-        // TODO: retry writes if we have to / error checking
-        write(out_fd, &ps->ehdr, sizeof(ps->ehdr));
+        if (write(out_fd, &ps->ehdr, sizeof(ps->ehdr)) != sizeof(ps->ehdr)) {
+          return -2;
+        }
         for (i = 0; i < ps->phdr_num; i++) {
-          write(out_fd, &ps->phdr[i], sizeof(ps->phdr[i]));
+          if (write(out_fd, &ps->phdr[i], sizeof(ps->phdr[i])) != sizeof(ps->phdr[i])) {
+            return -3;
+          }
         }
       }
     }
@@ -193,12 +196,15 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
     // every time we receive bytes before the end of the text segment, just pass them through
     if (ps->read_bytes < ps->text_end) {
       consumed_bytes = min(len, ps->text_end - ps->read_bytes);
-      // TODO: retry writes if we have to / error checking
-      write(out_fd, buff, consumed_bytes);
+      if (write(out_fd, buff, consumed_bytes) != consumed_bytes) {
+        return -4;
+      }
 
       // when we get to the end, dump in the shell and then the padding after it
       if (ps->read_bytes + consumed_bytes == ps->text_end) {
-        write(out_fd, shell, shell_size);
+        if (write(out_fd, shell, shell_size) != shell_size) {
+          return -5;
+        }
         int i;
         char null[] = "\0";
         // padding for page size left over and for the original space that existed between the data and text sections on disk
@@ -209,8 +215,9 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
     } else if (len > 0) {
       fprintf(stderr, "+++\n");
       consumed_bytes = len;
-      // TODO: retry writes if we have to / error checking
-      write(out_fd, buff, consumed_bytes);
+      if (write(out_fd, buff, consumed_bytes) != consumed_bytes) {
+        return -6;
+      }
     } else {
       // we are done!
       free(ps->phdr);
@@ -254,9 +261,13 @@ int main(int argc, char* argv[]) {
   }
   //XXX: a bit of a race condition here, TOCTOU, etc. but such is the way of the lazy; we check the size later again, I guess...
   shell_size = get_file_size(argv[1]);
+  if (shell_size == -1) {
+    fprintf(stderr, "Failed to stat shell file: %s", argv[1]);
+    return 1;
+  }
   shell = read_whole_file(argv[1], shell_size);
   if (!shell) {
-    return -1;
+    return 1;
   }
   int ret = process(STDIN_FILENO, STDOUT_FILENO);
   free(shell);
