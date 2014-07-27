@@ -70,7 +70,6 @@ typedef struct {
   long long phdr_offset;
   short phdr_num;
   long long text_end;
-  long long alignment_padding;
 } processing_state;
 
 // returns the number of bytes consumed, 0 on end of stream and negative on error
@@ -174,12 +173,6 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
         // 5. remember where the text segment ends so that we can insert the shell there
         ps->text_end = text_off + text_filesz;
 
-        // XXX: we don't we need this?
-        ps->alignment_padding = 0;//data_off - text_off + text_filesz;
-        fprintf(stderr, "%d\n", text_off);
-        fprintf(stderr, "%d\n", ps->alignment_padding);
-        fprintf(stderr, "%d\n", ps->text_end);
-
         // 6. start sending the ehdr and phdr
         fprintf(stderr, "start sending...\n");
         if (write(out_fd, &ps->ehdr, sizeof(ps->ehdr)) != sizeof(ps->ehdr)) {
@@ -208,7 +201,7 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
         int i;
         char null[] = "\0";
         // padding for page size left over and for the original space that existed between the data and text sections on disk
-        for (i = 0; i < page_size - shell_size + ps->alignment_padding; i++) {
+        for (i = 0; i < page_size - shell_size; i++) {
           write(out_fd, null, 1);
         }
       }
