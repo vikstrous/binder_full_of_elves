@@ -13,10 +13,12 @@
 
 // TODO: move forward by the necessary number of pages, not just one
 // TODO: patch the shell to return to the right place
-// TODO: fully implement the section stripping mode and the section preserving mode
-// TODO: extend the size of the last section in the section preserving mode
 // TODO: make the write calls more robust by accepting partial writes and re-trying the writes in those cases
 // TODO: make this code compile without warnings
+
+// TODO: fully implement the section stripping mode and the section preserving mode
+  // TODO: extend the size of the last section in the text segment
+  // TODO: move the start of sections that are after the break forward by a page
 
 static long long page_size = 0x1000;
 static unsigned shell_size;
@@ -73,6 +75,7 @@ typedef struct {
   long long phdr_offset;
   short phdr_num;
   long long text_end;
+  long long segment_data_end;
   int preserve_sections;
 } processing_state;
 
@@ -98,18 +101,18 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
       // 2. extract the size of phdr
       memcpy(&ps->phdr_num, ps->ehdr.e_phnum, sizeof(ps->ehdr.e_phnum));
 
-      // 3. zero out the section pointers
+      // 3. zero out the section pointers (or move them forward a page)
       if (ps->preserve_sections == 0) {
         memset(&ps->ehdr.e_shoff, 0, sizeof(ps->ehdr.e_shoff));
         memset(&ps->ehdr.e_shentsize, 0, sizeof(ps->ehdr.e_shentsize));
         memset(&ps->ehdr.e_shnum, 0, sizeof(ps->ehdr.e_shnum));
         memset(&ps->ehdr.e_shstrndx, 0, sizeof(ps->ehdr.e_shstrndx));
-      }
-      else {
-        // 3.1. move the location of the header sections forward by a page
-
-        // 3.2. move the start of sections that are after the break forward by a page
-
+      } else {
+        // 3. move the location of the header sections forward by a page
+        long long sh_off;
+        memcpy(&sh_off, &ps->ehdr.e_shoff, sizeof(ps->ehdr.e_shoff));
+        sh_off += page_size;
+        memcpy(&ps->ehdr.e_shoff, &sh_off, sizeof(ps->ehdr.e_shoff));
       }
 
       // 4. allocate a phdr array
@@ -139,8 +142,8 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
       // is this the last one?
       if (current_phdr == ps->phdr_num - 1) {
         fprintf(stderr, "done\n");
-        // 1. find the text and data segments
 
+        // 1. find the text segment
         int text_seg = -1;
         int i;
         for (i = 0; i < ps->phdr_num; i++) {
@@ -171,21 +174,31 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
         memcpy(&ps->phdr[text_seg].p_filesz, &text_newsz, sizeof(ps->phdr[text_seg].p_filesz));
         memcpy(&ps->phdr[text_seg].p_memsz, &text_newsz, sizeof(ps->phdr[text_seg].p_memsz));
 
-        // 4. all next segments forward by a page only on disk
+        // 4. all segments that are after our shell forward by a page only on disk
         // XXX: assume filesz == memsz
-        for (i = text_seg; i < ps->phdr_num; i++) {
-          long long data_off, data_new_off;
-          memcpy(&data_off, &ps->phdr[i].p_offset, sizeof(ps->phdr[i].p_offset));
-          if (data_off > text_off + text_filesz) {
-            data_new_off = data_off + page_size;
-            memcpy(&ps->phdr[i].p_offset, &data_new_off, sizeof(ps->phdr[i].p_offset));
+        for (i = 0; i < ps->phdr_num; i++) {
+          long long seg_off, seg_new_off;
+          memcpy(&seg_off, &ps->phdr[i].p_offset, sizeof(ps->phdr[i].p_offset));
+          if (seg_off > text_off + text_filesz) {
+            seg_new_off = seg_off + page_size;
+            memcpy(&ps->phdr[i].p_offset, &seg_new_off, sizeof(ps->phdr[i].p_offset));
           }
         }
 
-        // 5. remember where the text segment ends so that we can insert the shell there
+        // 5. find the end of the segment contents on disk so that we know where to cut off the file if stripping sections
+        if (ps->preserve_sections == 0) {
+          for (i = 0; i < ps->phdr_num; i++) {
+            long long seg_off, seg_size;
+            memcpy(&seg_off, &ps->phdr[i].p_offset, sizeof(ps->phdr[i].p_offset));
+            memcpy(&seg_size, &ps->phdr[i].p_filesz, sizeof(ps->phdr[i].p_filesz));
+            ps->segment_data_end = max(ps->segment_data_end, seg_off + seg_size);
+          }
+        }
+
+        // 6. remember where the text segment ends so that we can insert the shell there
         ps->text_end = text_off + text_filesz;
 
-        // 6. start sending the ehdr and phdr
+        // 7. start sending the ehdr and phdr
         fprintf(stderr, "start sending...\n");
         if (write(out_fd, &ps->ehdr, sizeof(ps->ehdr)) != sizeof(ps->ehdr)) {
           return -2;
@@ -214,14 +227,20 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
         char null[] = "\0";
         // padding for page size left over and for the original space that existed between the data and text sections on disk
         for (i = 0; i < page_size - shell_size; i++) {
-          write(out_fd, null, 1);
+          if (write(out_fd, null, 1) != 1) {
+            return -6;
+          }
         }
       }
     } else if (len > 0) {
       fprintf(stderr, "+++\n");
+      // depending on whether or not we preserve the sections, decide how much data to write out
       if (ps->preserve_sections == 0) {
-        // TODO: If we are supposed to strip the sections, we finish early and don't write them all out
-        consumed_bytes = len;
+        if (len >= ps->segment_data_end - ps->read_bytes) {
+          consumed_bytes = ps->segment_data_end - ps->read_bytes;
+        } else {
+          consumed_bytes = len;
+        }
       } else {
         consumed_bytes = len;
       }
